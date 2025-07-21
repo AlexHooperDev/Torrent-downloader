@@ -1,0 +1,12 @@
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+  background: #141414;
+  color: #fff;
+  overflow-x: hidden;
+}
+
+.status {
+  padding: 2rem 2rem 2rem 5rem;
+  text-align: center;
+} 
