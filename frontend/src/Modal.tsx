@@ -70,7 +70,8 @@ export default function Modal({ item, onClose }: Props) {
     }
 
     setPlayingOptions(optsToUse);
-    setPlayerSrc(`http://localhost:3000/stream?magnet=${encodeURIComponent(opt.magnet || "")}`);
+            const apiBase = process.env.NODE_ENV === 'production' ? '' : 'http://localhost:3000';
+        setPlayerSrc(`${apiBase}/stream?magnet=${encodeURIComponent(opt.magnet || "")}`);
 
     // Persist start progress
     updateProgress({

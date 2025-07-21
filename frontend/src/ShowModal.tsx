@@ -120,9 +120,10 @@ export default function ShowModal({ item, onClose }: Props) {
     const opt = option || chooseBestTorrent(torrentOptions);
     if (!opt) return;
     setPlayingOptions(torrentOptions);
-    setPlayerSrc(
-      `http://localhost:3000/stream?magnet=${encodeURIComponent(opt.magnet || "")}`
-    );
+            const apiBase = process.env.NODE_ENV === 'production' ? '' : 'http://localhost:3000';
+        setPlayerSrc(
+          `${apiBase}/stream?magnet=${encodeURIComponent(opt.magnet || "")}`
+        );
     setPlayingEpisode(selectedEpisode);
 
     // Persist start progress
@@ -154,9 +155,10 @@ export default function ShowModal({ item, onClose }: Props) {
       }
       if (best) {
         setPlayingOptions(torrents);
-        setPlayerSrc(
-          `http://localhost:3000/stream?magnet=${encodeURIComponent(best.magnet || "")}`
-        );
+                  const apiBase = process.env.NODE_ENV === 'production' ? '' : 'http://localhost:3000';
+          setPlayerSrc(
+            `${apiBase}/stream?magnet=${encodeURIComponent(best.magnet || "")}`
+          );
         setPlayingEpisode(episode);
 
         // Persist start progress

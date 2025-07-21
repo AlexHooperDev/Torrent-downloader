@@ -258,7 +258,8 @@ export default function FullscreenPlayer({
 
     const poll = async () => {
       try {
-        const res = await fetch(`http://localhost:3000/torrent/progress?magnet=${encodeURIComponent(magnet)}`);
+        const apiBase = process.env.NODE_ENV === 'production' ? '' : 'http://localhost:3000';
+        const res = await fetch(`${apiBase}/torrent/progress?magnet=${encodeURIComponent(magnet)}`);
         if (!res.ok) return;
         const data = await res.json();
         const pct = Math.round(((data.fileProgress ?? data.progress ?? 0) * 100));
@@ -290,7 +291,8 @@ export default function FullscreenPlayer({
     const preserveTime = currentTime; // Use the tracked currentTime which includes offset
     
     // Build new URL with current time to preserve playback position
-    const baseSrc = `http://localhost:3000/stream?magnet=${encodeURIComponent(opt.magnet)}`;
+    const apiBase = process.env.NODE_ENV === 'production' ? '' : 'http://localhost:3000';
+    const baseSrc = `${apiBase}/stream?magnet=${encodeURIComponent(opt.magnet)}`;
     const newSrc = preserveTime > 0 ? 
       `${baseSrc}&start=${Math.floor(preserveTime)}` : 
       baseSrc;
