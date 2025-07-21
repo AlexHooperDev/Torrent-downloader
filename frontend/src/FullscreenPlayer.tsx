@@ -56,6 +56,16 @@ export default function FullscreenPlayer({
   // given `src`.
   const resumeAppliedRef = useRef(false);
 
+  // Helper: safely extract `magnet` search param from a video src. Works with absolute OR relative URLs.
+  function getMagnetFromSrc(s: string): string {
+    try {
+      const url = new URL(s, window.location.origin);
+      return url.searchParams.get("magnet") || "";
+    } catch {
+      return "";
+    }
+  }
+
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -198,14 +208,7 @@ export default function FullscreenPlayer({
   useEffect(() => {
     // When src changes externally, attempt to track the matching torrent option
     if (!torrentOptions || torrentOptions.length === 0) return;
-    const magnetParam = (() => {
-      try {
-        const url = new URL(src);
-        return url.searchParams.get("magnet") || "";
-      } catch {
-        return "";
-      }
-    })();
+    const magnetParam = getMagnetFromSrc(src);
     const match = torrentOptions.find((t) => t.magnet === magnetParam);
     if (match) setCurrentOption(match);
   }, [src, torrentOptions]);
@@ -246,14 +249,7 @@ export default function FullscreenPlayer({
       return;
     }
 
-    const magnet = (() => {
-      try {
-        const u = new URL(src);
-        return u.searchParams.get("magnet") || "";
-      } catch {
-        return "";
-      }
-    })();
+    const magnet = getMagnetFromSrc(src);
     if (!magnet) return;
 
     const poll = async () => {
@@ -496,6 +492,8 @@ export default function FullscreenPlayer({
       <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>
     </svg>
   );
+
+  // getMagnetFromSrc moved to top of component (see above)
 
   return (
     <div className={`fullscreen-player ${!showControls ? 'controls-hidden' : ''}`} onMouseMove={handleMouseMove}>
