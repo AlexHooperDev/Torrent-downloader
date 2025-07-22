@@ -111,6 +111,12 @@ export async function searchTorrentOptions(title: string, year?: string, limit =
     const isEp = season !== undefined && episode !== undefined;
     const minSeeds = isEp ? 5 : 20;
 
+    // Helper: detect SxxEyy or similar patterns – used to guard movie searches from episode torrents (non-global so each .test() is fresh)
+    const episodeTokenRe = /(?:S\d{1,2}[\s._-]*E\d{1,2}|\d{1,2}[xX]\d{1,2}|Season[\s._-]*\d{1,2}[\s._-]*Episode)/i;
+
+    // Helper: capture a 4-digit year token (1900-2099) that stands alone (avoid 1080p etc.)
+    const yearTokenRe = /\b(19|20)\d{2}\b/;
+
     // Ensure ratio present & quality detected
     const enrichedRaw = deduped.map((t) => {
       const qMatch = t.name?.match(qualityRe);
@@ -129,6 +135,25 @@ export async function searchTorrentOptions(title: string, year?: string, limit =
       else if (isNonEnglish(t.name)) rejectedReason = "Non-English language tag";
       else if (isEp && (t.size ?? 0) > 20 * 1024 * 1024 * 1024) rejectedReason = "Likely full season (size >20GB)";
       else if (isEp && season !== undefined && episode !== undefined && !matchesEpisode(t.name, season, episode)) rejectedReason = "Episode token mismatch";
+      // Extra guards for MOVIE searches only
+      else if (!isEp) {
+        // 1) Reject torrents that clearly look like individual TV episodes
+        if (episodeTokenRe.test(t.name || "")) {
+          rejectedReason = "Appears to be TV episode for movie search";
+        }
+
+        // 2) If a distinct year token exists and we had a requested year, reject if it differs by >1
+        else if (year && yearTokenRe.test(t.name || "")) {
+          const yMatch = (t.name || "").match(yearTokenRe);
+          if (yMatch) {
+            const foundYear = parseInt(yMatch[0], 10);
+            const expectedYear = parseInt(year, 10);
+            if (Math.abs(foundYear - expectedYear) > 1) {
+              rejectedReason = `Year mismatch (${foundYear} vs ${expectedYear})`;
+            }
+          }
+        }
+      }
 
       if (TORRENT_DEBUG) {
         const baseInfo = {

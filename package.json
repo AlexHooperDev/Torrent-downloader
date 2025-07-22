@@ -1,7 +1,7 @@
 {
-  "name": "torrent-catalog",
+  "name": "hoopflix",
   "version": "0.1.0",
-  "description": "Netflix-style torrent browser",
+  "description": "Netflix-style streaming platform",
   "main": "dist/index.js",
   "scripts": {
     "dev": "ts-node-dev --respawn src/index.ts",
