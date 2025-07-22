@@ -1,3 +1,4 @@
+import "./bootstrap";
 import express, { Request, Response } from "express";
 import dotenv from "dotenv";
 import NodeCache from "node-cache";
@@ -6,6 +7,7 @@ import { getGenres, discoverMedia } from "./tmdb";
 import { searchTopTorrent, searchTorrentOptions } from "./torrent";
 import cors from "cors";
 import { streamTorrent, purgeAllTorrents, getClient } from "./stream";
+import { errorHandler } from "./middleware/errorHandler";
 
 dotenv.config();
 
@@ -265,6 +267,8 @@ app.get("/discover", async (req: Request, res: Response) => {
     res.status(500).json({ error: "Failed to fetch discover" });
   }
 });
+
+app.use(errorHandler);
 
 app.listen(PORT, () => {
   console.log(`Server listening on http://localhost:${PORT}`);

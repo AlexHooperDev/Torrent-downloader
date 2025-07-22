@@ -240,43 +240,67 @@ export async function streamTorrent(req: Request, res: Response) {
           debug(`[stream] ffmpeg exited code=${code} signal=${sig}`);
         });
 
-        pipeline(ff.stdout, res, (err: any) => {
-          if (err && err.code !== "ECONNRESET" && err.code !== "EPIPE" && err.code !== "ERR_STREAM_PREMATURE_CLOSE") {
-            console.error("Stream pipeline error", err);
+        try {
+          pipeline(ff.stdout, res, (err: any) => {
+            if (err && err.code !== "ECONNRESET" && err.code !== "EPIPE" && err.code !== "ERR_STREAM_PREMATURE_CLOSE") {
+              console.error("Stream pipeline error", err);
+            }
+            debug(`[stream] Pipeline completed (transcoded)`);
+            res.removeListener("close", onClientClose);
+            if (ff) {
+              try { ff.kill("SIGKILL"); } catch {}
+            }
+            scheduleCleanup(torrent!);
+          });
+        } catch (err: any) {
+          if (err.code === "ERR_STREAM_UNABLE_TO_PIPE") {
+            console.error("Pipeline setup error (transcoded)", err);
+          } else {
+            throw err;
           }
-          debug(`[stream] Pipeline completed (transcoded)`);
-          res.removeListener("close", onClientClose);
-          if (ff) {
-            try { ff.kill("SIGKILL"); } catch {}
-          }
-          scheduleCleanup(torrent!);
-        });
+        }
 
         ff.on("error", (e: any) => console.error("ffmpeg error", e));
       } catch (e: any) {
         if (e.code === "ENOENT") {
           console.warn("ffmpeg not found – streaming without transcoding");
-          pipeline(src, res, (err: any) => {
-            if (err && err.code !== "ECONNRESET" && err.code !== "EPIPE" && err.code !== "ERR_STREAM_PREMATURE_CLOSE") {
-              console.error("Stream pipeline error", err);
+          try {
+            pipeline(src, res, (err: any) => {
+              if (err && err.code !== "ECONNRESET" && err.code !== "EPIPE" && err.code !== "ERR_STREAM_PREMATURE_CLOSE") {
+                console.error("Stream pipeline error", err);
+              }
+              debug(`[stream] Pipeline completed (no ffmpeg fallback)`);
+              res.removeListener("close", onClientClose);
+              scheduleCleanup(torrent!);
+            });
+          } catch (err: any) {
+            if (err.code === "ERR_STREAM_UNABLE_TO_PIPE") {
+              console.error("Pipeline setup error (no ffmpeg)", err);
+            } else {
+              throw err;
             }
-            debug(`[stream] Pipeline completed (no ffmpeg fallback)`);
-            res.removeListener("close", onClientClose);
-            scheduleCleanup(torrent!);
-          });
+          }
         } else {
           throw e;
         }
       }
     } else {
-      pipeline(src, res, (err: any) => {
-        if (err && err.code !== "ECONNRESET" && err.code !== "EPIPE" && err.code !== "ERR_STREAM_PREMATURE_CLOSE") {
-          console.error("Stream pipeline error", err);
+      try {
+        pipeline(src, res, (err: any) => {
+          if (err && err.code !== "ECONNRESET" && err.code !== "EPIPE" && err.code !== "ERR_STREAM_PREMATURE_CLOSE") {
+            console.error("Stream pipeline error", err);
+          }
+          debug(`[stream] Pipeline completed (direct)`);
+          res.removeListener("close", onClientClose);
+          scheduleCleanup(torrent!);
+        });
+      } catch (err: any) {
+        if (err.code === "ERR_STREAM_UNABLE_TO_PIPE") {
+          console.error("Pipeline setup error (direct)", err);
+        } else {
+          throw err;
         }
-        debug(`[stream] Pipeline completed (direct)`);
-        res.removeListener("close", onClientClose);
-        scheduleCleanup(torrent!);
-      });
+      }
     }
   };
 
