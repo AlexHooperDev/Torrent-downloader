@@ -16,6 +16,8 @@ function HorizontalCarousel<T extends CatalogItem>({ title, items, onSelect }: H
   const [canScrollRight, setCanScrollRight] = useState(false);
   const [hoveredItem, setHoveredItem] = useState<T | null>(null);
   const [hoverTimeout, setHoverTimeout] = useState<NodeJS.Timeout | null>(null);
+  // Track which images have finished loading to display them only after load
+  const [loadedMap, setLoadedMap] = useState<Record<number, boolean>>({});
   const [fadeOut, setFadeOut] = useState(false);
   const [hoverPosition, setHoverPosition] = useState<{ left: number; top: number; transform: string } | null>(null);
   const componentId = useRef(Math.random().toString(36).substring(2, 10));
@@ -92,7 +94,7 @@ function HorizontalCarousel<T extends CatalogItem>({ title, items, onSelect }: H
     };
   }, [hoverTimeout]);
 
-  if (items.length === 0) return null;
+  const isLoading = items.length === 0;
 
   function scroll(direction: "left" | "right") {
     const el = scrollerRef.current;
@@ -246,7 +248,7 @@ function HorizontalCarousel<T extends CatalogItem>({ title, items, onSelect }: H
     <section className="hcarousel">
       <h2>{title}</h2>
       <div className="hcarousel-wrapper">
-        {canScrollLeft && (
+        {!isLoading && canScrollLeft && (
           <button className="arrow left" onClick={() => scroll("left")} aria-label="Previous">
             <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="15,18 9,12 15,6"></polyline>
@@ -254,25 +256,35 @@ function HorizontalCarousel<T extends CatalogItem>({ title, items, onSelect }: H
           </button>
         )}
         <div className="hcarousel-scroller" ref={scrollerRef}>
-          {items.map((it) => (
-            <div 
-              key={`${title}-${it.id}`} 
-              className="hcarousel-card" 
-              onMouseEnter={(event) => handleMouseEnter(it, event)}
-              onMouseLeave={handleMouseLeave}
-              onClick={() => onSelect(it)}
-            >
-              <img
-                src={`https://image.tmdb.org/t/p/w342${it.poster_path}`}
-                alt={"title" in it ? (it.title as string) : "Item"}
-              />
-              {"resumeLabel" in it && (it as any).resumeLabel && (
-                <span className="overlay">{(it as any).resumeLabel}</span>
-              )}
-            </div>
-          ))}
+          {isLoading
+            ? Array.from({ length: 10 }).map((_, idx) => (
+                <div key={`sk-${idx}`} className="hcarousel-card">
+                  <div className="skeleton" />
+                </div>
+              ))
+            : items.map((it) => (
+                <div 
+                  key={`${title}-${it.id}`} 
+                  className="hcarousel-card" 
+                  onMouseEnter={(event) => handleMouseEnter(it, event)}
+                  onMouseLeave={handleMouseLeave}
+                  onClick={() => onSelect(it)}
+                >
+                  {/* Skeleton placeholder shown until the image finishes loading */}
+                  {!loadedMap[it.id] && <div className="skeleton" />}
+                  <img
+                    src={`https://image.tmdb.org/t/p/w342${it.poster_path}`}
+                    alt={"title" in it ? (it.title as string) : "Item"}
+                    onLoad={() => setLoadedMap((prev) => ({ ...prev, [it.id]: true }))}
+                    style={{ display: loadedMap[it.id] ? "block" : "none" }}
+                  />
+                  {loadedMap[it.id] && "resumeLabel" in it && (it as any).resumeLabel && (
+                    <span className="overlay">{(it as any).resumeLabel}</span>
+                  )}
+                </div>
+              ))}
         </div>
-        {canScrollRight && (
+        {!isLoading && canScrollRight && (
           <button className="arrow right" onClick={() => scroll("right")} aria-label="Next">
             <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="9,18 15,12 9,6"></polyline>

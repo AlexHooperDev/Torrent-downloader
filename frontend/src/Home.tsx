@@ -200,7 +200,7 @@ function Home({ searchResults, searching }: HomeProps) {
     );
   }
 
-  if (loading) return <p className="status">Loading…</p>;
+  // We no longer short-circuit on loading; empty carousels will display their own skeletons
 
   return (
     <>

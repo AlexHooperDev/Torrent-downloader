@@ -147,7 +147,18 @@ export async function streamTorrent(req: Request, res: Response) {
   }
 
   // Decide whether to transcode: forced via query OR auto for non-playable containers
-  const isPlayableContainer = /\.(mp4|webm)$/i.test(file.name);
+  // --- Browser-specific compatibility -------------------------------------
+  // Safari (both macOS & iOS) still cannot play WebM in a <video> element.  
+  // We therefore consider ONLY MP4 containers natively playable for Safari, 
+  // whereas Chrome/Edge/Firefox can handle both MP4 and WebM.  To avoid
+  // wasting CPU we detect Safari via the User-Agent header and switch the
+  // playable-container test accordingly.
+  const ua = String(req.headers["user-agent"] || "");
+  const isSafari = /Safari/i.test(ua) && !/Chrome|Chromium|Edg/i.test(ua);
+
+  const isPlayableContainer = isSafari
+    ? /\.mp4$/i.test(file.name)            // Safari: MP4 only
+    : /\.(mp4|webm)$/i.test(file.name);    // Others: MP4 or WebM
   const shouldTranscode = transcodeForced || !isPlayableContainer;
 
   // Prefetch next few minutes worth of data to speed up seek / startup when transcoding

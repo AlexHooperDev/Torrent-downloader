@@ -7,6 +7,7 @@ import {
   MovieDetailsApi,
 } from "./api";
 import FullscreenPlayer from "./FullscreenPlayer";
+import SplashScreen from "./SplashScreen";
 import { getProgress, updateProgress } from "./progress";
 import "./Modal.css";
 
@@ -22,6 +23,8 @@ export default function Modal({ item, onClose }: Props) {
   const [noStreams, setNoStreams] = useState(false);
   const [playerSrc, setPlayerSrc] = useState<string | null>(null);
   const [playingOptions, setPlayingOptions] = useState<TorrentOption[]>([]);
+  // Controls interim splash screen before player shows
+  const [showSplash, setShowSplash] = useState(false);
 
   // Load stored progress for this movie (if any)
   const storedProgress = getProgress(item.id, "movie");
@@ -42,46 +45,49 @@ export default function Modal({ item, onClose }: Props) {
   }
 
   async function play(option?: TorrentOption) {
-    if (loadingTorrents) return; // guard
+    if (loadingTorrents) return; // Prevent concurrent calls
+
     setNoStreams(false);
+    setLoadingTorrents(true);
 
-    // If we haven't fetched torrents yet, fetch them now
-    if (options.length === 0) {
-      setLoadingTorrents(true);
-      try {
-        const fetched = await getTorrentOptions(item.title, item.year);
-        setOptions(fetched);
-      } finally {
-        setLoadingTorrents(false);
+    try {
+      // Ensure we have torrent options available (fetch once if necessary)
+      let optsToUse: TorrentOption[] = options;
+      if (optsToUse.length === 0) {
+        optsToUse = await getTorrentOptions(item.title, item.year);
+        setOptions(optsToUse); // cache for subsequent plays
       }
+
+      if (!optsToUse.length) {
+        setNoStreams(true);
+        return;
+      }
+
+      const opt = option || chooseBestTorrent(optsToUse);
+      if (!opt) {
+        setNoStreams(true);
+        return;
+      }
+
+      setPlayingOptions(optsToUse);
+      const apiBase = process.env.NODE_ENV === 'production' ? '' : 'http://localhost:3000';
+      setPlayerSrc(`${apiBase}/stream?magnet=${encodeURIComponent(opt.magnet || "")}`);
+      // Show branded splash while player prepares
+      setShowSplash(true);
+
+      // Persist start progress
+      updateProgress({
+        id: item.id,
+        media_type: "movie",
+        title: item.title,
+        poster_path: item.poster_path,
+        finished: false,
+        watchedSeconds: storedProgress?.watchedSeconds || 0,
+      });
+    } finally {
+      // Always turn the spinner off at the end
+      setLoadingTorrents(false);
     }
-
-    const optsToUse = options.length ? options : await getTorrentOptions(item.title, item.year);
-
-    if (!optsToUse.length) {
-      setNoStreams(true);
-      return;
-    }
-
-    const opt = option || chooseBestTorrent(optsToUse);
-    if (!opt) {
-      setNoStreams(true);
-      return;
-    }
-
-    setPlayingOptions(optsToUse);
-            const apiBase = process.env.NODE_ENV === 'production' ? '' : 'http://localhost:3000';
-        setPlayerSrc(`${apiBase}/stream?magnet=${encodeURIComponent(opt.magnet || "")}`);
-
-    // Persist start progress
-    updateProgress({
-      id: item.id,
-      media_type: "movie",
-      title: item.title,
-      poster_path: item.poster_path,
-      finished: false,
-      watchedSeconds: storedProgress?.watchedSeconds || 0,
-    });
   }
 
   // Truncate text to 30 words
@@ -231,6 +237,10 @@ export default function Modal({ item, onClose }: Props) {
             }}
             initialTime={storedProgress?.watchedSeconds || 0}
           />
+        )}
+
+        {showSplash && (
+          <SplashScreen onComplete={() => setShowSplash(false)} />
         )}
       </div>
     </div>

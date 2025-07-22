@@ -10,6 +10,7 @@ import {
 } from "./api";
 import { getProgress, updateProgress } from "./progress";
 import FullscreenPlayer from "./FullscreenPlayer";
+import SplashScreen from "./SplashScreen";
 import "./Modal.css";
 
 interface Props {
@@ -39,6 +40,8 @@ export default function ShowModal({ item, onClose }: Props) {
   const [loadingTorrents, setLoadingTorrents] = useState(false);
   const [playerSrc, setPlayerSrc] = useState<string | null>(null);
   const [playingEpisode, setPlayingEpisode] = useState<EpisodeInfo | null>(null);
+  // Controls interim splash screen before player shows
+  const [showSplash, setShowSplash] = useState(false);
   const [playingOptions, setPlayingOptions] = useState<TorrentOption[]>([]); // track options passed to player
   const [loadingEpisodeId, setLoadingEpisodeId] = useState<number | null>(null); // episode currently loading
   const [unavailableEpisodes, setUnavailableEpisodes] = useState<number[]>([]);
@@ -116,18 +119,45 @@ export default function ShowModal({ item, onClose }: Props) {
     return hd || sortedByRatio[0];
   }
 
-  function play(option?: TorrentOption) {
-    const opt = option || chooseBestTorrent(torrentOptions);
-    if (!opt) return;
-    setPlayingOptions(torrentOptions);
-            const apiBase = process.env.NODE_ENV === 'production' ? '' : 'http://localhost:3000';
-        setPlayerSrc(
-          `${apiBase}/stream?magnet=${encodeURIComponent(opt.magnet || "")}`
-        );
-    setPlayingEpisode(selectedEpisode);
+  async function play(option?: TorrentOption) {
+    // Guard: need an episode selected
+    if (!selectedEpisode) return;
 
-    // Persist start progress
-    if (selectedEpisode) {
+    // Prevent concurrent fetch / play requests
+    if (loadingTorrents) return;
+
+    setLoadingTorrents(true);
+    try {
+      // Ensure we have torrent options (lazy-fetch on first play)
+      let optsToUse: TorrentOption[] = torrentOptions;
+      if (optsToUse.length === 0) {
+        optsToUse = await getEpisodeTorrentOptions(
+          item.title,
+          selectedEpisode.season_number,
+          selectedEpisode.episode_number,
+          item.year
+        );
+        setTorrentOptions(optsToUse); // cache for future plays
+      }
+
+      if (!optsToUse.length) {
+        // No streams found – mark episode unavailable so UI can show ⛔
+        setUnavailableEpisodes(prev => prev.includes(selectedEpisode.id) ? prev : [...prev, selectedEpisode.id]);
+        return;
+      }
+
+      const opt = option || chooseBestTorrent(optsToUse);
+      if (!opt) return;
+
+      setPlayingOptions(optsToUse);
+      const apiBase = process.env.NODE_ENV === 'production' ? '' : 'http://localhost:3000';
+      setPlayerSrc(`${apiBase}/stream?magnet=${encodeURIComponent(opt.magnet || "")}`);
+
+      // Show branded splash while player prepares
+      setShowSplash(true);
+      setPlayingEpisode(selectedEpisode);
+
+      // Persist start progress
       updateProgress({
         id: item.id,
         media_type: "tv",
@@ -136,6 +166,8 @@ export default function ShowModal({ item, onClose }: Props) {
         season: selectedEpisode.season_number,
         episode: selectedEpisode.episode_number,
       });
+    } finally {
+      setLoadingTorrents(false);
     }
   }
 
@@ -159,6 +191,8 @@ export default function ShowModal({ item, onClose }: Props) {
           setPlayerSrc(
             `${apiBase}/stream?magnet=${encodeURIComponent(best.magnet || "")}`
           );
+        // Show branded splash while player prepares
+        setShowSplash(true);
         setPlayingEpisode(episode);
 
         // Persist start progress
@@ -239,9 +273,16 @@ export default function ShowModal({ item, onClose }: Props) {
                 <button
                   className="netflix-play-btn"
                   onClick={() => play()}
+                  disabled={loadingTorrents}
                 >
-                  <span className="play-icon">▶</span>
-                  {storedProgress && storedProgress.season && storedProgress.episode
+                  {loadingTorrents ? (
+                    <div className="loading-spinner-sm" />
+                  ) : (
+                    <span className="play-icon">▶</span>
+                  )}
+                  {loadingTorrents
+                    ? "Loading"
+                    : storedProgress && storedProgress.season && storedProgress.episode
                     ? "Resume"
                     : "Play"}
                 </button>
@@ -448,6 +489,10 @@ export default function ShowModal({ item, onClose }: Props) {
             return 0;
           })()}
         />
+      )}
+
+      {showSplash && (
+        <SplashScreen onComplete={() => setShowSplash(false)} />
       )}
       
       {/* End of modal content */}

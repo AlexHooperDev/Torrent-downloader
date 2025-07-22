@@ -5,6 +5,7 @@ import NavBar from "./NavBar";
 import Home from "./Home";
 import MoviesPage from "./MoviesPage";
 import TvShowsPage from "./TvShowsPage";
+import SplashScreen from "./SplashScreen";
 import { CatalogItem, searchCatalog } from "./api";
 
 function AppContent() {
@@ -62,6 +63,36 @@ function AppContent() {
 }
 
 function App() {
+  const [showSplash, setShowSplash] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    // Check if user has seen the intro before
+    const hasSeenIntro = localStorage.getItem('hoopflix-intro-seen');
+    
+    if (!hasSeenIntro) {
+      setShowSplash(true);
+    }
+    setIsLoading(false);
+  }, []);
+
+  const handleSplashComplete = () => {
+    // Mark that user has seen the intro
+    localStorage.setItem('hoopflix-intro-seen', 'true');
+    setShowSplash(false);
+  };
+
+  // Don't render anything while checking localStorage
+  if (isLoading) {
+    return null;
+  }
+
+  // Show splash screen for first-time visitors
+  if (showSplash) {
+    return <SplashScreen onComplete={handleSplashComplete} />;
+  }
+
+  // Show main app
   return (
     <BrowserRouter>
       <AppContent />
