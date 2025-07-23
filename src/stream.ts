@@ -6,25 +6,22 @@ import { spawn } from "child_process";
 import fs from "fs";
 import ffmpegPath from "ffmpeg-static";
 import path from "path";
+import * as cron from "node-cron";
 
 // Enable verbose logging by starting the server with DEBUG_STREAM=1
 function debug(...args: any[]) {
   if (process.env.DEBUG_STREAM === "1") console.log(...args);
 }
 
-// After a stream finishes we disconnect peers after a short idle window, but
-// we keep the downloaded pieces on disk for up to 24 h so the user can resume
-// without re-fetching.
+// After a stream finishes we disconnect peers after a short idle window
 const idleTimeoutMs = 2 * 60 * 1000;       // 2 min until we drop peer connections
-const retentionMs   = 24 * 60 * 60 * 1000; // 24 h on-disk cache lifetime
 
 // Where on disk to keep torrent data (override with env CACHE_DIR)
 const CACHE_DIR = process.env.CACHE_DIR || path.join(process.cwd(), "cache");
 fs.mkdirSync(CACHE_DIR, { recursive: true });
 
-// Track timers so we don’t schedule duplicates per infoHash
+// Track idle timers to prevent duplicates per infoHash
 const idleTimers = new Map<string, NodeJS.Timeout>();
-const retentionTimers = new Map<string, NodeJS.Timeout>();
 
 // Extra open trackers to accelerate peer discovery
 const EXTRA_TRACKERS = [
@@ -40,6 +37,64 @@ const client = new WebTorrent({
   dht: true,
   tracker: { announce: EXTRA_TRACKERS },
 });
+
+// Schedule daily cache cleanup at 3am
+cron.schedule('0 3 * * *', () => {
+  console.log('🧹 Running daily cache cleanup at 3am...');
+  wipeAllCacheFiles();
+}, {
+  timezone: "Europe/London" // UK timezone
+});
+
+function wipeAllCacheFiles() {
+  try {
+    // First, destroy all active torrents to release file handles
+    client.torrents.forEach((t: any) => {
+      try {
+        t.destroy({ destroyStore: true });
+        debug(`[cleanup] Destroyed active torrent ${t.infoHash}`);
+      } catch (e) {
+        console.error("Error destroying active torrent during cleanup", e);
+      }
+    });
+
+    // Then remove all files from cache directory
+    if (fs.existsSync(CACHE_DIR)) {
+      const files = fs.readdirSync(CACHE_DIR, { withFileTypes: true });
+      let deletedCount = 0;
+      let totalSize = 0;
+
+      for (const file of files) {
+        const filePath = path.join(CACHE_DIR, file.name);
+        try {
+          if (file.isDirectory()) {
+            // Recursively remove directories
+            const stats = fs.statSync(filePath);
+            totalSize += stats.size;
+            fs.rmSync(filePath, { recursive: true, force: true });
+            deletedCount++;
+          } else {
+            // Remove files
+            const stats = fs.statSync(filePath);
+            totalSize += stats.size;
+            fs.unlinkSync(filePath);
+            deletedCount++;
+          }
+        } catch (err) {
+          console.error(`Error deleting ${filePath}:`, err);
+        }
+      }
+
+      const sizeMB = (totalSize / (1024 * 1024)).toFixed(1);
+      console.log(`🧹 Cache cleanup complete: deleted ${deletedCount} items, freed ${sizeMB}MB`);
+    }
+
+    // Clear any remaining timers
+    idleTimers.clear();
+  } catch (err) {
+    console.error("Error during cache cleanup:", err);
+  }
+}
 
 // NEW: expose client so other modules (e.g., API routes) can read torrent stats
 export function getClient() {
@@ -70,7 +125,7 @@ export async function streamTorrent(req: Request, res: Response) {
     if (t.magnetURI !== magnet) {
       try {
         debug(`[stream] Stopping previous torrent ${t.infoHash}`);
-        scheduleRetention(t); // disconnect but keep files for 24 h
+        scheduleCleanup(t); // disconnect but keep files until 3am cleanup
       } catch {}
     }
   });
@@ -381,8 +436,11 @@ export function purgeAllTorrents() {
       console.error("Error destroying torrent", e);
     }
   });
-  retentionTimers.clear();
+  idleTimers.clear();
 }
+
+// Export the cache cleanup function so it can be called manually if needed
+export { wipeAllCacheFiles };
 
 // ----------------------------------------------------------
 //  Idle-&-retention helpers
@@ -391,40 +449,14 @@ export function purgeAllTorrents() {
 function scheduleCleanup(torrent: any) {
   if (idleTimers.has(torrent.infoHash)) return;
   const timer = setTimeout(() => {
-    scheduleRetention(torrent); // handles peer disconnect + retention window
+    // The retention logic is now handled by the cron job, so this just disconnects peers.
+    try {
+      torrent.deselect(0, torrent.pieces.length - 1, 0);
+      debug(`[stream] Disconnected torrent ${torrent.infoHash} – data retained`);
+    } catch {}
     idleTimers.delete(torrent.infoHash);
   }, idleTimeoutMs);
   idleTimers.set(torrent.infoHash, timer);
-}
-
-function scheduleRetention(torrent: any) {
-  // Already scheduled? abort.
-  if (retentionTimers.has(torrent.infoHash)) return;
-
-  // First, disconnect peers so it stops downloading immediately.
-  try {
-    torrent.deselect(0, torrent.pieces.length - 1, 0);
-    torrent.destroy({ destroyStore: false }); // keep pieces on disk
-    debug(`[stream] Disconnected torrent ${torrent.infoHash} – data retained`);
-  } catch {}
-
-  const timer = setTimeout(() => {
-    try {
-      // Remove files after retention elapsed. This spawns a temp client so
-      // WebTorrent cleans up its own store reliably.
-      const tmp = new WebTorrent();
-      tmp.add(torrent.magnetURI || torrent.magnet, { path: CACHE_DIR }, (t: any) => {
-        t.destroy({ destroyStore: true });
-        tmp.destroy();
-      });
-      console.log(`Removed cached data for ${torrent.infoHash} after 24 h`);
-    } catch (err) {
-      console.error("Retention cleanup error", err);
-    }
-    retentionTimers.delete(torrent.infoHash);
-  }, retentionMs);
-
-  retentionTimers.set(torrent.infoHash, timer);
 }
 
 function getMimeType(name: string) {
