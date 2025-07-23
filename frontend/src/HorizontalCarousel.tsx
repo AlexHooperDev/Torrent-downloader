@@ -7,9 +7,10 @@ interface HorizontalCarouselProps<T extends CatalogItem> {
   title: string;
   items: T[];
   onSelect: (item: T) => void;
+  nested?: boolean; // When true, reduces left padding for pages that already have padding
 }
 
-function HorizontalCarousel<T extends CatalogItem>({ title, items, onSelect }: HorizontalCarouselProps<T>) {
+function HorizontalCarousel<T extends CatalogItem>({ title, items, onSelect, nested = false }: HorizontalCarouselProps<T>) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [canScroll, setCanScroll] = useState(false);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
@@ -245,7 +246,7 @@ function HorizontalCarousel<T extends CatalogItem>({ title, items, onSelect }: H
   };
 
   return (
-    <section className="hcarousel">
+    <section className={`hcarousel ${nested ? 'hcarousel-nested' : ''}`}>
       <h2>{title}</h2>
       <div className="hcarousel-wrapper">
         {!isLoading && canScrollLeft && (
@@ -278,9 +279,6 @@ function HorizontalCarousel<T extends CatalogItem>({ title, items, onSelect }: H
                     onLoad={() => setLoadedMap((prev) => ({ ...prev, [it.id]: true }))}
                     style={{ display: loadedMap[it.id] ? "block" : "none" }}
                   />
-                  {loadedMap[it.id] && "resumeLabel" in it && (it as any).resumeLabel && (
-                    <span className="overlay">{(it as any).resumeLabel}</span>
-                  )}
                 </div>
               ))}
         </div>

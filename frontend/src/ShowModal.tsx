@@ -9,6 +9,7 @@ import {
   TorrentOption,
 } from "./api";
 import { getProgress, updateProgress } from "./progress";
+import { myListService } from "./myListService";
 import FullscreenPlayer from "./FullscreenPlayer";
 import SplashScreen from "./SplashScreen";
 import "./Modal.css";
@@ -45,9 +46,30 @@ export default function ShowModal({ item, onClose }: Props) {
   const [playingOptions, setPlayingOptions] = useState<TorrentOption[]>([]); // track options passed to player
   const [loadingEpisodeId, setLoadingEpisodeId] = useState<number | null>(null); // episode currently loading
   const [unavailableEpisodes, setUnavailableEpisodes] = useState<number[]>([]);
+  const [isInMyList, setIsInMyList] = useState(false);
 
   // Load stored progress for this show (if any)
   const storedProgress = getProgress(item.id, "tv");
+
+  // Check if item is in My List
+  useEffect(() => {
+    setIsInMyList(myListService.isInMyList(item.id));
+  }, [item.id]);
+
+  // Listen for My List updates
+  useEffect(() => {
+    const handleMyListUpdate = (event: CustomEvent) => {
+      const { action, item: updatedItem, itemId } = event.detail;
+      if (action === 'add' && updatedItem?.id === item.id) {
+        setIsInMyList(true);
+      } else if (action === 'remove' && itemId === item.id) {
+        setIsInMyList(false);
+      }
+    };
+
+    window.addEventListener('myListUpdated', handleMyListUpdate as EventListener);
+    return () => window.removeEventListener('myListUpdated', handleMyListUpdate as EventListener);
+  }, [item.id]);
 
   // Load show details
   useEffect(() => {
@@ -165,6 +187,7 @@ export default function ShowModal({ item, onClose }: Props) {
         poster_path: item.poster_path,
         season: selectedEpisode.season_number,
         episode: selectedEpisode.episode_number,
+        runtimeSeconds: (selectedEpisode.runtime || details?.episode_run_time?.[0] || 45) * 60,
       });
     } finally {
       setLoadingTorrents(false);
@@ -203,6 +226,7 @@ export default function ShowModal({ item, onClose }: Props) {
           poster_path: item.poster_path,
           season: episode.season_number,
           episode: episode.episode_number,
+          runtimeSeconds: (episode.runtime || details?.episode_run_time?.[0] || 45) * 60,
         });
       }
     } finally {
@@ -230,6 +254,36 @@ export default function ShowModal({ item, onClose }: Props) {
   };
 
   const currentEpisode = getCurrentEpisode();
+
+  // Determine the next episode (same season only for now)
+  const nextEpisode = (() => {
+    if (!playingEpisode) return null;
+    const idx = episodes.findIndex((ep) => ep.id === playingEpisode.id);
+    if (idx !== -1 && idx < episodes.length - 1) {
+      const candidate = episodes[idx + 1];
+      // Only allow if already released
+      if (!candidate.air_date || new Date(candidate.air_date) <= new Date()) {
+        return candidate;
+      }
+    }
+    return null;
+  })();
+
+  const handleNextEpisode = () => {
+    if (!nextEpisode) return;
+    // Ensure season is updated if moving to same season (it's already), but guard if not
+    if (currentSeason !== nextEpisode.season_number) {
+      setCurrentSeason(nextEpisode.season_number);
+    }
+    playEpisode(nextEpisode);
+  };
+
+  const nextEpisodeLoading = (!!nextEpisode && (loadingEpisodeId === nextEpisode.id || loadingTorrents));
+
+  const handleAddToMyList = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    myListService.toggleInMyList(item);
+  };
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -285,6 +339,23 @@ export default function ShowModal({ item, onClose }: Props) {
                     : storedProgress && storedProgress.season && storedProgress.episode
                     ? "Resume"
                     : "Play"}
+                </button>
+                <button
+                  className="netflix-circle-btn netflix-my-list-btn"
+                  onClick={handleAddToMyList}
+                  disabled={loadingTorrents}
+                  aria-label={isInMyList ? "Remove from My List" : "Add to My List"}
+                  title={isInMyList ? "Remove from My List" : "Add to My List"}
+                >
+                  {isInMyList ? (
+                    <svg viewBox="0 0 24 24" width="24" height="24" fill="white">
+                      <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" width="24" height="24" fill="white">
+                      <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                    </svg>
+                  )}
                 </button>
               </div>
             </div>
@@ -381,8 +452,10 @@ export default function ShowModal({ item, onClose }: Props) {
               <p className="loading-text">Loading episodes…</p>
             ) : (
               <div className="netflix-episodes-list">
-                {episodes.map((ep, index) => (
-                  <div key={ep.id} className="netflix-episode-item">
+                {episodes.map((ep, index) => {
+                  const isFuture = ep.air_date && new Date(ep.air_date) > new Date();
+                  return (
+                  <div key={ep.id} className={`netflix-episode-item${isFuture ? ' future' : ''}`}>
                     <div className="episode-number">{index + 1}</div>
                     <div className="episode-thumbnail-container">
                       {ep.still_path ? (
@@ -394,25 +467,34 @@ export default function ShowModal({ item, onClose }: Props) {
                       ) : (
                         <div className="episode-thumbnail placeholder" />
                       )}
-                      {/* Progress bar overlay */}
-                      <div className="episode-progress-bar">
-                        <div 
-                          className="progress-fill" 
-                          style={{ width: `${(()=>{
-                            const prog = getProgress(item.id, "tv");
-                            if(prog && prog.season===ep.season_number && prog.episode===ep.episode_number && ep.runtime){
-                              return Math.min(100, Math.floor(( (prog.watchedSeconds||0)/(ep.runtime*60))*100));
-                            }
-                            return 0;})()}%` }}
-                        />
-                      </div>
+                      {/* Progress bar overlay – hide for unreleased episodes */}
+                      {!isFuture && (
+                        <div className="episode-progress-bar">
+                          <div 
+                            className="progress-fill" 
+                            style={{ width: `${(()=>{
+                              const prog = getProgress(item.id, "tv", ep.season_number, ep.episode_number);
+                              if(prog && ep.runtime){
+                                return Math.min(100, Math.floor(((prog.watchedSeconds||0)/(ep.runtime*60))*100));
+                              }
+                              return 0;})()}%` }}
+                          />
+                        </div>
+                      )}
+                      {isFuture && (
+                        <div className="episode-coming-overlay">
+                          Coming {ep.air_date ? new Date(ep.air_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : ''}
+                        </div>
+                      )}
                       <div className="episode-play-overlay">
                         <button 
                           className="episode-play-btn"
                           onClick={() => playEpisode(ep)}
-                          disabled={loadingEpisodeId === ep.id || unavailableEpisodes.includes(ep.id)}
+                          disabled={isFuture || loadingEpisodeId === ep.id || unavailableEpisodes.includes(ep.id)}
                         >
-                          {loadingEpisodeId === ep.id ? (
+                          {isFuture ? (
+                            '🔒'
+                          ) : loadingEpisodeId === ep.id ? (
                             <div className="loading-spinner-sm" />
                           ) : unavailableEpisodes.includes(ep.id) ? (
                             '⛔'
@@ -425,7 +507,11 @@ export default function ShowModal({ item, onClose }: Props) {
                     <div className="episode-details">
                       <div className="episode-header">
                         <h4 className="episode-name">{ep.name}</h4>
-                        <span className="episode-duration">{ep.runtime || (details?.episode_run_time?.[0] ?? "")}m</span>
+                        <span className="episode-duration">
+                          {isFuture && ep.air_date
+                            ? new Date(ep.air_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+                            : `${ep.runtime || (details?.episode_run_time?.[0] ?? "")}m`}
+                        </span>
                       </div>
                       <p className="episode-overview">{truncateDescription(ep.overview, 25)}</p>
                       {/* Torrent options UI removed – only play button overlay remains */}
@@ -437,7 +523,8 @@ export default function ShowModal({ item, onClose }: Props) {
                     )}
                     {/* Removed episode select toggle */}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -445,6 +532,7 @@ export default function ShowModal({ item, onClose }: Props) {
       
       {playerSrc && playingEpisode && (
         <FullscreenPlayer
+          key={playingEpisode.id}
           src={playerSrc}
           title={`${item.title} - S${playingEpisode.season_number}:E${playingEpisode.episode_number}`}
           subtitle={playingEpisode.name}
@@ -464,6 +552,7 @@ export default function ShowModal({ item, onClose }: Props) {
               season: playingEpisode.season_number,
               episode: playingEpisode.episode_number,
               watchedSeconds: Math.floor(currentTime),
+              runtimeSeconds: (playingEpisode.runtime || details?.episode_run_time?.[0] || 45) * 60,
             });
           }}
           onEnded={() => {
@@ -477,17 +566,20 @@ export default function ShowModal({ item, onClose }: Props) {
               episode: playingEpisode.episode_number,
               finished: true,
               watchedSeconds: playingEpisode.runtime ? playingEpisode.runtime * 60 : undefined,
+              runtimeSeconds: (playingEpisode.runtime || details?.episode_run_time?.[0] || 45) * 60,
             });
             setPlayerSrc(null);
             setPlayingEpisode(null);
           }}
           initialTime={(() => {
-            const prog = getProgress(item.id, "tv");
-            if (prog && prog.season === playingEpisode.season_number && prog.episode === playingEpisode.episode_number) {
+            const prog = getProgress(item.id, "tv", playingEpisode.season_number, playingEpisode.episode_number);
+            if (prog) {
               return prog.watchedSeconds || 0;
             }
             return 0;
           })()}
+          onNextEpisode={nextEpisode ? handleNextEpisode : undefined}
+          nextEpisodeLoading={nextEpisodeLoading}
         />
       )}
 

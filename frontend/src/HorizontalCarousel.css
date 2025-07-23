@@ -9,6 +9,10 @@
   color: #e5e5e5;
 }
 
+.hcarousel-nested h2 {
+  margin-left: 0;
+}
+
 .hcarousel-wrapper {
   position: relative;
   overflow: visible; /* Allow hover cards to extend outside */
@@ -20,6 +24,10 @@
   scroll-behavior: smooth;
   white-space: nowrap;
   padding: 0.5rem 2rem 2rem 4rem; /* Reduced padding for tighter spacing */
+}
+
+.hcarousel-nested .hcarousel-scroller {
+  padding-left: 0;
 }
 
 /* Hide default scrollbar */

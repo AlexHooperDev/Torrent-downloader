@@ -138,7 +138,6 @@ function GridSection<T extends GridItem>({ title, items, onSelect }: GridSection
               src={`https://image.tmdb.org/t/p/w342${it.poster_path}`}
               alt={"title" in it ? (it.title as string) : "Item"}
             />
-            <span className="overlay">{(it as any).resumeLabel || "Select"}</span>
 
             {hoveredItem && hoveredItem.id === it.id && (
               <PosterHoverCard

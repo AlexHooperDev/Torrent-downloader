@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import "./FullscreenPlayer.css";
 
+// Debug helper – set to true in development to trace player behaviour
+const DEBUG = process.env.NODE_ENV !== "production";
+
 interface FullscreenPlayerProps {
   src: string;
   title: string;
@@ -11,6 +14,10 @@ interface FullscreenPlayerProps {
   initialTime?: number;
   runtime?: number; // Runtime in minutes from TMDB
   torrentOptions?: import("./api").TorrentOption[]; // NEW prop for available qualities
+  /** Callback to trigger playing the next episode (TV only). If provided, the player will show a “Next Episode” button during the last 2 minutes of playback. */
+  onNextEpisode?: () => void;
+  /** Whether the "Next Episode" action is currently loading */
+  nextEpisodeLoading?: boolean;
 }
 
 export default function FullscreenPlayer({
@@ -22,7 +29,9 @@ export default function FullscreenPlayer({
   onEnded,
   initialTime = 0,
   runtime,
-  torrentOptions
+  torrentOptions,
+  onNextEpisode,
+  nextEpisodeLoading,
 }: FullscreenPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(true);
@@ -67,6 +76,9 @@ export default function FullscreenPlayer({
   }
 
   useEffect(() => {
+    if (DEBUG) {
+      console.log("[Player] mount", { src, initialTime });
+    }
     const video = videoRef.current;
     if (!video) return;
 
@@ -82,7 +94,7 @@ export default function FullscreenPlayer({
     }
 
     const handleLoadedData = () => {
-      setIsLoading(false);
+      if (DEBUG) console.log("[Player] loadeddata", { currentTime: video.currentTime, initialTime, offsetSeconds });
       // Use runtime from TMDB if available, otherwise fall back to video duration
       const actualDuration = runtime ? runtime * 60 : video.duration;
       setDuration(actualDuration);
@@ -116,6 +128,9 @@ export default function FullscreenPlayer({
             }
             setIsPlaying(!wasPaused);
           }
+          else {
+            if (DEBUG) console.log("[Player] native seek succeeded, offsetSeconds=", offsetSeconds);
+          }
         }, 200);
       }
     };
@@ -124,29 +139,46 @@ export default function FullscreenPlayer({
       // While buffering, or until we have successfully aligned the stream with
       // the requested resume offset, suppress updates so the UI doesn’t show
       // misleading timestamps.
-      if (isLoading || (initialTime > 0 && offsetSeconds === 0)) return;
+      // Allow timeupdates regardless of offsetSeconds to avoid frozen timestamps.
+      if (DEBUG) console.log("[Player] timeupdate", { videoTime: video.currentTime, offsetSeconds, total: offsetSeconds + video.currentTime });
       const total = offsetSeconds + video.currentTime;
       setCurrentTime(total);
       onTimeUpdate?.(total);
     };
 
     const handleEnded = () => {
+      if (DEBUG) console.log("[Player] ended");
       setIsPlaying(false);
       onEnded?.();
     };
 
     const handleLoadStart = () => {
+      if (DEBUG) console.log("[Player] loadstart");
       setIsLoading(true);
       setLoadingStart(Date.now());
       setShowSwitchPrompt(false);
     };
     const handleCanPlay = () => setIsLoading(false);
 
+    // Some browsers emit 'waiting' when buffering stalls and 'playing' when
+    // data is again available. We use these to keep `isLoading` accurate so
+    // timeupdate events are not suppressed once playback resumes.
+    const handleWaiting = () => {
+      if (DEBUG) console.log("[Player] waiting (buffering)");
+      setIsLoading(true);
+    };
+    const handlePlaying = () => {
+      if (DEBUG) console.log("[Player] playing (resume)");
+      setIsLoading(false);
+    };
+
     video.addEventListener('loadeddata', handleLoadedData);
     video.addEventListener('timeupdate', handleTimeUpdate);
     video.addEventListener('ended', handleEnded);
     video.addEventListener('loadstart', handleLoadStart);
     video.addEventListener('canplay', handleCanPlay);
+    video.addEventListener('waiting', handleWaiting);
+    video.addEventListener('playing', handlePlaying);
 
     return () => {
       video.removeEventListener('loadeddata', handleLoadedData);
@@ -154,6 +186,8 @@ export default function FullscreenPlayer({
       video.removeEventListener('ended', handleEnded);
       video.removeEventListener('loadstart', handleLoadStart);
       video.removeEventListener('canplay', handleCanPlay);
+      video.removeEventListener('waiting', handleWaiting);
+      video.removeEventListener('playing', handlePlaying);
     };
   }, [initialTime, onTimeUpdate, onEnded, offsetSeconds, src, isPlaying, isLoading]);
 
@@ -165,8 +199,12 @@ export default function FullscreenPlayer({
     const video = videoRef.current;
     if (!video) return;
 
-    const handlePlay = () => setIsPlaying(true);
+    const handlePlay = () => {
+      if (DEBUG) console.log("[Player] play event");
+      setIsPlaying(true);
+    };
     const handlePause = () => {
+      if (DEBUG) console.log("[Player] pause event", { videoTime: video.currentTime });
       setIsPlaying(false);
       // Sync scrubber with the precise pause position
       const ct = video.currentTime;
@@ -474,6 +512,10 @@ export default function FullscreenPlayer({
 
   const progressPercentage = duration > 0 ? (currentTime / duration) * 100 : 0;
 
+  // Show the "Next Episode" prompt when within the final 2 minutes of playback.
+  const isNearEnd = duration > 0 && duration - currentTime <= 120;
+  const showNextEpisodeBtn = !!onNextEpisode && isNearEnd;
+
   // Volume icon SVGs
   const VolumeOffIcon = () => (
     <svg className="volume-icon" viewBox="0 0 24 24">
@@ -509,7 +551,7 @@ export default function FullscreenPlayer({
         <div className="loading-overlay">
           <div className="loading-spinner"></div>
           <div className="loading-info">
-            <div className="loading-headline">Buffering… {bufferPct}%</div>
+            <div className="loading-headline">Buffering…</div>
             <div className="loading-meta">{formatSpeed(bufferSpeed)} • {bufferPeers} {bufferPeers === 1 ? 'source' : 'sources'}</div>
             <div className="loading-bar">
               <div className="loading-bar-fill" style={{ width: `${bufferPct}%` }}></div>
@@ -630,6 +672,20 @@ export default function FullscreenPlayer({
           </div>
         </div>
       </div>
+
+      {showNextEpisodeBtn && (
+        <button
+          className="next-episode-btn"
+          onClick={onNextEpisode}
+          disabled={nextEpisodeLoading}
+        >
+          {nextEpisodeLoading ? (
+            <div className="loading-spinner-sm" />
+          ) : (
+            <>▶ Next Episode</>
+          )}
+        </button>
+      )}
     </div>
   );
 } 

@@ -564,3 +564,33 @@
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.5);
 } 
+
+/* Next Episode button (TV shows) */
+.next-episode-btn {
+  position: absolute;
+  bottom: 7rem;
+  right: 2rem;
+  background: #fff;
+  color: #000;
+  border: none;
+  font-size: 1rem;
+  padding: 0.6rem 1.2rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  transition: background 0.2s ease;
+  z-index: 20; /* above overlays */
+}
+
+.next-episode-btn:hover {
+  background: #e6e6e6;
+} 
+
+.next-episode-btn[disabled] {
+  opacity: 0.7;
+  cursor: default;
+} 

@@ -64,6 +64,11 @@ function NavBar({ query = "", onQueryChange, clearQuery }: NavBarProps) {
             Movies
           </NavLink>
         </li>
+        <li>
+          <NavLink to="/my-list" className={({ isActive }: { isActive: boolean }) => (isActive ? "active" : undefined)} onClick={handleNavClick}>
+            My List
+          </NavLink>
+        </li>
       </ul>
 
       {onQueryChange && (

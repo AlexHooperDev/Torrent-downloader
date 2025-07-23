@@ -5,6 +5,7 @@ import NavBar from "./NavBar";
 import Home from "./Home";
 import MoviesPage from "./MoviesPage";
 import TvShowsPage from "./TvShowsPage";
+import MyListPage from "./MyListPage";
 import SplashScreen from "./SplashScreen";
 import { CatalogItem, searchCatalog } from "./api";
 
@@ -57,6 +58,7 @@ function AppContent() {
         />
         <Route path="/movies" element={<MoviesPage />} />
         <Route path="/tv" element={<TvShowsPage />} />
+        <Route path="/my-list" element={<MyListPage />} />
       </Routes>
     </>
   );

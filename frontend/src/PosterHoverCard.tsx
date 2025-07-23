@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { CatalogItem, getMovieDetails, getShowDetails, MovieDetailsApi, ShowDetailsApi, getMovieVideos, getShowVideos, VideoItem } from "./api";
+import { myListService } from "./myListService";
 import "./PosterHoverCard.css";
 
 interface PosterHoverCardProps<T extends CatalogItem> {
@@ -18,6 +19,27 @@ export default function PosterHoverCard<T extends CatalogItem>({ item, onSelect,
   const [videoKey, setVideoKey] = useState<string | null>(null);
   const [showVideo, setShowVideo] = useState(false);
   const [muted, setMuted] = useState(true);
+  const [isInMyList, setIsInMyList] = useState(false);
+
+  // Check if item is in My List
+  useEffect(() => {
+    setIsInMyList(myListService.isInMyList(item.id));
+  }, [item.id]);
+
+  // Listen for My List updates
+  useEffect(() => {
+    const handleMyListUpdate = (event: CustomEvent) => {
+      const { action, item: updatedItem, itemId } = event.detail;
+      if (action === 'add' && updatedItem?.id === item.id) {
+        setIsInMyList(true);
+      } else if (action === 'remove' && itemId === item.id) {
+        setIsInMyList(false);
+      }
+    };
+
+    window.addEventListener('myListUpdated', handleMyListUpdate as EventListener);
+    return () => window.removeEventListener('myListUpdated', handleMyListUpdate as EventListener);
+  }, [item.id]);
 
   useEffect(() => {
     if (isVisible && !details && !isLoading) {
@@ -65,6 +87,11 @@ export default function PosterHoverCard<T extends CatalogItem>({ item, onSelect,
   const truncateText = (text: string, maxLength: number) => {
     if (text.length <= maxLength) return text;
     return text.slice(0, maxLength) + "...";
+  };
+
+  const handleAddToMyList = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    myListService.toggleInMyList(item);
   };
 
   // Only hide completely when neither visible nor fading out
@@ -149,6 +176,39 @@ export default function PosterHoverCard<T extends CatalogItem>({ item, onSelect,
               {item.media_type === "tv" ? "TV Series" : "Movie"}
             </span>
           </div>
+        </div>
+
+        {/* Action buttons */}
+        <div className="hover-card-actions">
+          <button
+            className="hover-card-play-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              onSelect(item);
+            }}
+            aria-label="Play"
+            title="Play"
+          >
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+              <path d="M8 5v14l11-7z"/>
+            </svg>
+          </button>
+          <button
+            className="hover-card-add-btn"
+            onClick={handleAddToMyList}
+            aria-label={isInMyList ? "Remove from My List" : "Add to My List"}
+            title={isInMyList ? "Remove from My List" : "Add to My List"}
+          >
+            {isInMyList ? (
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+              </svg>
+            ) : (
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+              </svg>
+            )}
+          </button>
         </div>
 
         {/* Genres */}

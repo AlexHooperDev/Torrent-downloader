@@ -9,6 +9,12 @@ if (!TMDB_KEY) {
 
 const BASE = "https://api.themoviedb.org/3";
 
+// Helper – keep only English-language entries
+function isEnglish(r: any): boolean {
+  // TMDB marks original_language using ISO-639-1 ("en" for English)
+  return (r.original_language || "en") === "en";
+}
+
 export interface MediaItem {
   id: number;
   title: string;
@@ -45,7 +51,7 @@ async function getTrending(): Promise<MediaItem[]> {
     params: { api_key: TMDB_KEY },
   });
 
-  return data.results.map((r: any) => ({
+  return data.results.filter(isEnglish).map((r: any) => ({
     id: r.id,
     title: r.title || r.name,
     overview: r.overview,
@@ -107,8 +113,9 @@ export async function getTrendingMedia(media: "all" | "movie" | "tv" = "all", pa
   const responses = await Promise.all(requests);
   const items: MediaItem[] = [];
   for (const { data } of responses) {
+    const filtered = data.results.filter(isEnglish);
     items.push(
-      ...data.results.map((r: any) => ({
+      ...filtered.map((r: any) => ({
         id: r.id,
         title: r.title || r.name,
         overview: r.overview,
@@ -124,32 +131,146 @@ export async function getTrendingMedia(media: "all" | "movie" | "tv" = "all", pa
   return items;
 }
 
-export async function getNewTv(pages = 2): Promise<MediaItem[]> {
-  // Use TMDB on_the_air endpoint for currently airing TV shows
-  const requests = Array.from({ length: pages }, (_, i) => i + 1).map((page) =>
-    axios.get(`${BASE}/tv/on_the_air`, {
-      params: { api_key: TMDB_KEY, page },
-    })
-  );
+export async function getNewTv(pages = 4): Promise<MediaItem[]> {
+  // Set up date filtering - allow shows up to 7 days in the future (for timezone differences)
+  const maxFutureDate = new Date();
+  maxFutureDate.setDate(maxFutureDate.getDate() + 7);
+  const maxFutureDateStr = maxFutureDate.toISOString().split('T')[0];
+  
+  // Helper function to filter out shows with future release dates
+  const filterValidReleaseDate = (r: any) => {
+    const releaseDate = r.first_air_date;
+    if (!releaseDate) return true; // Keep shows without release dates
+    return releaseDate <= maxFutureDateStr; // Only keep shows released within 7 days from now
+  };
 
-  const responses = await Promise.all(requests);
-  const items: MediaItem[] = [];
-  for (const { data } of responses) {
-    items.push(
-      ...data.results.map((r: any) => ({
-        id: r.id,
-        title: r.name,
-        overview: r.overview,
-        poster_path: r.poster_path,
-        genre_ids: r.genre_ids,
-        release_date: r.first_air_date,
-        media_type: "tv",
-        year: (r.first_air_date || "").split("-")[0],
-        vote_average: r.vote_average,
-      }))
+  // Function to fetch shows from multiple sources
+  const fetchShows = async (onAirPages: number, discoverPages: number, daysBack: number) => {
+    // Use TMDB on_the_air endpoint for currently airing TV shows (English only)
+    const onAirRequests = Array.from({ length: onAirPages }, (_, i) => i + 1).map((page) =>
+      axios.get(`${BASE}/tv/on_the_air`, {
+        params: { api_key: TMDB_KEY, page, with_original_language: "en" },
+      })
     );
+
+    // Get recently aired shows using discover with recent air dates
+    const daysAgoDate = new Date();
+    daysAgoDate.setDate(daysAgoDate.getDate() - daysBack);
+    const recentAirDate = daysAgoDate.toISOString().split('T')[0];
+
+    const discoverRequests = Array.from({ length: discoverPages }, (_, i) => i + 1).map((page) =>
+      axios.get(`${BASE}/discover/tv`, {
+        params: { 
+          api_key: TMDB_KEY, 
+          page,
+          'first_air_date.gte': recentAirDate,
+          sort_by: 'first_air_date.desc',
+          with_original_language: 'en'
+        }
+      })
+    );
+
+    const [onAirResponses, discoverResponses] = await Promise.all([
+      Promise.all(onAirRequests),
+      Promise.all(discoverRequests)
+    ]);
+
+    const items: MediaItem[] = [];
+    
+    // Add on-air shows
+    for (const { data } of onAirResponses) {
+      items.push(
+        ...data.results
+          .filter(filterValidReleaseDate)
+          .map((r: any) => ({
+            id: r.id,
+            title: r.name,
+            overview: r.overview,
+            poster_path: r.poster_path,
+            genre_ids: r.genre_ids,
+            release_date: r.first_air_date,
+            media_type: "tv",
+            year: (r.first_air_date || "").split("-")[0],
+            vote_average: r.vote_average,
+          }))
+      );
+    }
+
+    // Add recently aired shows
+    for (const { data } of discoverResponses) {
+      items.push(
+        ...data.results
+          .filter(filterValidReleaseDate)
+          .map((r: any) => ({
+            id: r.id,
+            title: r.name,
+            overview: r.overview,
+            poster_path: r.poster_path,
+            genre_ids: r.genre_ids,
+            release_date: r.first_air_date,
+            media_type: "tv",
+            year: (r.first_air_date || "").split("-")[0],
+            vote_average: r.vote_average,
+          }))
+      );
+    }
+
+    // Remove duplicates by ID
+    return items.filter((item, index, self) => 
+      index === self.findIndex(t => t.id === item.id)
+    );
+  };
+
+  // Start with initial fetch
+  let shows = await fetchShows(pages, 2, 30); // 4 pages on-air, 2 pages discover, 30 days back
+
+  // If we have fewer than 30 shows, try to get more
+  if (shows.length < 30) {
+    console.log(`Only ${shows.length} new TV shows found, fetching more...`);
+    
+    // Try with more pages and longer time range
+    shows = await fetchShows(pages + 2, 4, 60); // 6 pages on-air, 4 pages discover, 60 days back
+    
+    // If still not enough, add popular recent shows as fallback
+    if (shows.length < 30) {
+      console.log(`Still only ${shows.length} shows, adding popular recent shows...`);
+      
+      const popularRequests = Array.from({ length: 3 }, (_, i) => i + 1).map((page) =>
+        axios.get(`${BASE}/tv/popular`, {
+          params: { api_key: TMDB_KEY, page },
+        })
+      );
+      
+      const popularResponses = await Promise.all(popularRequests);
+      const popularShows: MediaItem[] = [];
+      
+      for (const { data } of popularResponses) {
+        popularShows.push(
+          ...data.results
+            .filter(filterValidReleaseDate)
+            .map((r: any) => ({
+              id: r.id,
+              title: r.name,
+              overview: r.overview,
+              poster_path: r.poster_path,
+              genre_ids: r.genre_ids,
+              release_date: r.first_air_date,
+              media_type: "tv",
+              year: (r.first_air_date || "").split("-")[0],
+              vote_average: r.vote_average,
+            }))
+        );
+      }
+      
+      // Merge with existing shows and remove duplicates
+      const allShows = [...shows, ...popularShows];
+      shows = allShows.filter((item, index, self) => 
+        index === self.findIndex(t => t.id === item.id)
+      );
+    }
   }
-  return items;
+
+  return shows;
 }
 
 export async function searchMulti(query: string, pages = 1): Promise<MediaItem[]> {
@@ -164,7 +285,7 @@ export async function searchMulti(query: string, pages = 1): Promise<MediaItem[]
   for (const { data } of responses) {
     results.push(
       ...data.results
-        .filter((r: any) => r.media_type === "movie" || r.media_type === "tv")
+        .filter((r: any) => !["person"].includes(r.media_type) && isEnglish(r))
         .map((r: any) => ({
           id: r.id,
           title: r.title || r.name,
@@ -298,6 +419,7 @@ export async function discoverMedia(
       api_key: TMDB_KEY,
       page: pg,
       sort_by: sortBy,
+      with_original_language: "en",
       "vote_count.gte": minVotes,
     };
     if (genreId) params.with_genres = genreId;
@@ -309,23 +431,39 @@ export async function discoverMedia(
       }
     }
     const { data } = await axios.get(url, { params });
-    return data.results as any[];
+    return data.results.filter(isEnglish) as any[];
   };
 
-  const pageNumbers = Array.from({ length: pages }, (_, i) => page + i);
-  const responses = await Promise.all(pageNumbers.map((p) => fetchPage(p)));
-  const merged = responses.flat();
-  return merged.map((r: any) => ({
-    id: r.id,
-    title: r.title || r.name,
-    overview: r.overview,
-    poster_path: r.poster_path,
-    genre_ids: r.genre_ids,
-    release_date: r.release_date || r.first_air_date,
-    media_type: media,
-    year: (r.release_date || r.first_air_date || "").split("-")[0],
-    vote_average: r.vote_average,
-  }));
+  const items: MediaItem[] = [];
+  const start = page;
+  for (let i = 0; i < pages; i++) {
+     const pageItems = await fetchPage(start + i);
+     items.push(...pageItems);
+   }
+
+   // Deduplicate by media_type & id while preserving order
+   const seen = new Set<string>();
+   const unique: any[] = [];
+   for (const it of items) {
+     const key = `${media}-${it.id}`;
+     if (!seen.has(key)) {
+       seen.add(key);
+       unique.push(it);
+     }
+   }
+
+   // Map to MediaItem shape
+   return unique.map((r: any) => ({
+     id: r.id,
+     title: r.title || r.name,
+     overview: r.overview,
+     poster_path: r.poster_path,
+     genre_ids: r.genre_ids,
+     release_date: media === "movie" ? r.release_date : r.first_air_date,
+     media_type: media,
+     year: (r.release_date || r.first_air_date || "").split("-")[0],
+     vote_average: r.vote_average,
+   }));
 }
 
 export interface VideoItem {

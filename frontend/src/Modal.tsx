@@ -9,6 +9,7 @@ import {
 import FullscreenPlayer from "./FullscreenPlayer";
 import SplashScreen from "./SplashScreen";
 import { getProgress, updateProgress } from "./progress";
+import { myListService } from "./myListService";
 import "./Modal.css";
 
 interface Props {
@@ -25,9 +26,30 @@ export default function Modal({ item, onClose }: Props) {
   const [playingOptions, setPlayingOptions] = useState<TorrentOption[]>([]);
   // Controls interim splash screen before player shows
   const [showSplash, setShowSplash] = useState(false);
+  const [isInMyList, setIsInMyList] = useState(false);
 
   // Load stored progress for this movie (if any)
   const storedProgress = getProgress(item.id, "movie");
+
+  // Check if item is in My List
+  useEffect(() => {
+    setIsInMyList(myListService.isInMyList(item.id));
+  }, [item.id]);
+
+  // Listen for My List updates
+  useEffect(() => {
+    const handleMyListUpdate = (event: CustomEvent) => {
+      const { action, item: updatedItem, itemId } = event.detail;
+      if (action === 'add' && updatedItem?.id === item.id) {
+        setIsInMyList(true);
+      } else if (action === 'remove' && itemId === item.id) {
+        setIsInMyList(false);
+      }
+    };
+
+    window.addEventListener('myListUpdated', handleMyListUpdate as EventListener);
+    return () => window.removeEventListener('myListUpdated', handleMyListUpdate as EventListener);
+  }, [item.id]);
 
   // Load movie details
   useEffect(() => {
@@ -43,6 +65,11 @@ export default function Modal({ item, onClose }: Props) {
     const hd = sortedByRatio.find((o) => /1080/i.test(o.quality || ""));
     return hd || sortedByRatio[0];
   }
+
+  const handleAddToMyList = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    myListService.toggleInMyList(item);
+  };
 
   async function play(option?: TorrentOption) {
     if (loadingTorrents) return; // Prevent concurrent calls
@@ -83,6 +110,7 @@ export default function Modal({ item, onClose }: Props) {
         poster_path: item.poster_path,
         finished: false,
         watchedSeconds: storedProgress?.watchedSeconds || 0,
+        runtimeSeconds: runtimeMinutes * 60,
       });
     } finally {
       // Always turn the spinner off at the end
@@ -159,6 +187,23 @@ export default function Modal({ item, onClose }: Props) {
                     ? "Resume"
                     : "Play"}
                 </button>
+                <button
+                  className="netflix-circle-btn netflix-my-list-btn"
+                  onClick={handleAddToMyList}
+                  disabled={loadingTorrents}
+                  aria-label={isInMyList ? "Remove from My List" : "Add to My List"}
+                  title={isInMyList ? "Remove from My List" : "Add to My List"}
+                >
+                  {isInMyList ? (
+                    <svg viewBox="0 0 24 24" width="24" height="24" fill="white">
+                      <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" width="24" height="24" fill="white">
+                      <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                    </svg>
+                  )}
+                </button>
               </div>
             </div>
           </div>
@@ -223,6 +268,7 @@ export default function Modal({ item, onClose }: Props) {
                 poster_path: item.poster_path,
                 finished: false,
                 watchedSeconds: Math.floor(currentTime),
+                runtimeSeconds: runtimeMinutes * 60,
               });
             }}
             onEnded={() => {
@@ -232,6 +278,7 @@ export default function Modal({ item, onClose }: Props) {
                 title: item.title,
                 poster_path: item.poster_path,
                 finished: true,
+                runtimeSeconds: runtimeMinutes * 60,
               });
               setPlayerSrc(null);
             }}

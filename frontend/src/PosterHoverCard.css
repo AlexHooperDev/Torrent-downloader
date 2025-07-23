@@ -236,6 +236,63 @@
   font-weight: 500;
 }
 
+/* Action buttons section */
+.hover-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.hover-card-play-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.9);
+  color: #000;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  padding: 0;
+}
+
+.hover-card-play-btn:hover {
+  border-color: #fff;
+  background: #fff;
+  transform: scale(1.1);
+}
+
+.hover-card-add-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  background: rgba(42, 42, 42, 0.6);
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  padding: 0;
+}
+
+.hover-card-add-btn:hover {
+  border-color: #fff;
+  background: rgba(42, 42, 42, 0.8);
+  transform: scale(1.1);
+}
+
+/* Special styling for add button when item is in list */
+.hover-card-add-btn:has(svg[data-checked]) {
+  border-color: #46d369;
+  background: rgba(70, 211, 105, 0.2);
+  color: #46d369;
+}
+
 /* Ensure the hover card appears above other content */
 .hcarousel-card {
   position: relative;

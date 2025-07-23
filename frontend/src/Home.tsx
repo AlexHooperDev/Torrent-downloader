@@ -15,6 +15,58 @@ function filterKids(items: CatalogItem[]): CatalogItem[] {
     return true;
   });
 }
+
+// Filter out Talk, Reality, News, and Soap categories
+const UNWANTED_TV_GENRE_IDS = [10767, 10764, 10763, 10766]; // Talk, Reality, News, Soap
+function filterUnwantedTvCategories(items: CatalogItem[]): CatalogItem[] {
+  return items.filter((it: any) => {
+    const ids: number[] | undefined = it.genre_ids;
+    if (ids && ids.some((id) => UNWANTED_TV_GENRE_IDS.includes(id))) return false;
+    const names: string[] | undefined = it.genres;
+    if (names && names.some((n) => ["Talk", "Reality", "News", "Soap"].includes(n))) return false;
+    return true;
+  });
+}
+
+function filterAnimeAndJapanese(items: CatalogItem[]): CatalogItem[] {
+  return items.filter((it: any) => {
+    const title = it.title?.toLowerCase() || "";
+    const overview = it.overview?.toLowerCase() || "";
+    
+    // Filter out obvious anime/manga keywords
+    const animeKeywords = [
+      "anime", "manga", "japanese animation", "studio ghibli",
+      "one piece", "naruto", "dragon ball", "attack on titan",
+      "demon slayer", "jujutsu kaisen", "my hero academia",
+      "pokemon", "digimon", "sailor moon", "bleach",
+      "hunter x hunter", "fullmetal alchemist", "death note",
+      "spirited away", "totoro", "princess mononoke",
+      "akira", "ghost in the shell", "cowboy bebop",
+      "your name", "weathering with you", "grave of the fireflies"
+    ];
+    
+    const hasAnimeKeywords = animeKeywords.some(keyword => 
+      title.includes(keyword) || overview.includes(keyword)
+    );
+    
+    if (hasAnimeKeywords) return false;
+    
+    // Check for Japanese origin indicators
+    const japaneseIndicators = [
+      "japanese", "japan", "tokyo", "osaka", "kyoto",
+      "samurai", "ninja", "yakuza", "shonen", "shounen",
+      "seinen", "josei", "shoujo", "mecha", "kawaii"
+    ];
+    
+    const hasJapaneseIndicators = japaneseIndicators.some(indicator => 
+      title.includes(indicator) || overview.includes(indicator)
+    );
+    
+    if (hasJapaneseIndicators) return false;
+    
+    return true;
+  });
+}
 import "./App.css";
 import Modal from "./Modal";
 import ShowModal from "./ShowModal";
@@ -115,7 +167,6 @@ function GridSection({ title, items, onSelect }: { title: string; items: GridIte
               src={`https://image.tmdb.org/t/p/w342${it.poster_path}`}
               alt={it.title}
             />
-            <span className="overlay">{it.resumeLabel || "Select"}</span>
             
             {/* Netflix-style hover card */}
             {hoveredItem && hoveredItem.id === it.id && (
@@ -149,55 +200,121 @@ function Home({ searchResults, searching }: HomeProps) {
       getNewTv(),
     ])
       .then(([movies, tv, newTvItems]) => {
-        setTrendingMovies(filterKids(movies));
-        setTrendingTv(filterKids(tv));
-        setNewTv(filterKids(newTvItems));
+        setTrendingMovies(filterAnimeAndJapanese(filterKids(movies)));
+        setTrendingTv(filterAnimeAndJapanese(filterUnwantedTvCategories(filterKids(tv))));
+        setNewTv(filterAnimeAndJapanese(filterUnwantedTvCategories(filterKids(newTvItems))));
       })
       .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
     const progress = getAllProgress();
-    setContinueWatching(
-      progress
-        .filter((p) => !p.finished)
-        .map((p) => {
-          const label =
-            p.media_type === "tv" && p.season && p.episode
-              ? `Resume S${p.season}E${p.episode}`
-              : "Resume";
-          return {
-            id: p.id,
-            title: p.title,
-            poster_path: p.poster_path,
-            overview: "",
-            media_type: p.media_type,
-            resumeLabel: label,
-          } as GridItem;
-        })
-    );
+    
+    // Filter and process progress entries
+    const filteredProgress = progress
+      .filter((p) => {
+        // Only show unfinished items
+        if (p.finished) return false;
+        
+        // Filter out items with less than 1 minute watch time (60 seconds)
+        if (!p.watchedSeconds || p.watchedSeconds < 60) return false;
+        
+        // Filter out items with less than 2 minutes remaining (120 seconds)
+        if (p.runtimeSeconds && p.watchedSeconds) {
+          const remainingTime = p.runtimeSeconds - p.watchedSeconds;
+          if (remainingTime < 120) return false;
+        }
+        
+        return true;
+      });
+    
+    // Group TV shows by show ID and keep only the most recently watched episode
+    const groupedProgress = new Map<string, typeof filteredProgress[0]>();
+    
+    filteredProgress.forEach((p) => {
+      if (p.media_type === "tv") {
+        const key = `tv-${p.id}`;
+        // Always update to the current episode since we're iterating through the array
+        // in order, so later entries represent more recently watched episodes
+        groupedProgress.set(key, p);
+      } else {
+        // For movies, just use the movie ID as key
+        groupedProgress.set(`movie-${p.id}`, p);
+      }
+    });
+    
+    // Convert back to array and create GridItems
+    const continueWatchingItems = Array.from(groupedProgress.values()).map((p) => {
+      const label =
+        p.media_type === "tv" && p.season && p.episode
+          ? `Resume S${p.season}E${p.episode}`
+          : "Resume";
+      return {
+        id: p.id,
+        title: p.title,
+        poster_path: p.poster_path,
+        overview: "",
+        media_type: p.media_type,
+        resumeLabel: label,
+      } as GridItem;
+    });
+    
+    setContinueWatching(continueWatchingItems);
   }, []);
 
   function refreshProgress() {
     const progress = getAllProgress();
-    setContinueWatching(
-      progress
-        .filter((p) => !p.finished)
-        .map((p) => {
-          const label =
-            p.media_type === "tv" && p.season && p.episode
-              ? `Resume S${p.season}E${p.episode}`
-              : "Resume";
-          return {
-            id: p.id,
-            title: p.title,
-            poster_path: p.poster_path,
-            overview: "",
-            media_type: p.media_type,
-            resumeLabel: label,
-          } as GridItem;
-        })
-    );
+    
+    // Filter and process progress entries (same logic as useEffect)
+    const filteredProgress = progress
+      .filter((p) => {
+        // Only show unfinished items
+        if (p.finished) return false;
+        
+        // Filter out items with less than 1 minute watch time (60 seconds)
+        if (!p.watchedSeconds || p.watchedSeconds < 60) return false;
+        
+        // Filter out items with less than 2 minutes remaining (120 seconds)
+        if (p.runtimeSeconds && p.watchedSeconds) {
+          const remainingTime = p.runtimeSeconds - p.watchedSeconds;
+          if (remainingTime < 120) return false;
+        }
+        
+        return true;
+      });
+    
+    // Group TV shows by show ID and keep only the most recently watched episode
+    const groupedProgress = new Map<string, typeof filteredProgress[0]>();
+    
+    filteredProgress.forEach((p) => {
+      if (p.media_type === "tv") {
+        const key = `tv-${p.id}`;
+        // Always update to the current episode since we're iterating through the array
+        // in order, so later entries represent more recently watched episodes
+        groupedProgress.set(key, p);
+      } else {
+        // For movies, just use the movie ID as key
+        groupedProgress.set(`movie-${p.id}`, p);
+      }
+    });
+    
+    // Convert back to array and create GridItems
+    const continueWatchingItems = Array.from(groupedProgress.values()).map((p) => {
+      const label =
+        p.media_type === "tv" && p.season && p.episode
+          ? `Resume S${p.season}E${p.episode}`
+          : "Resume";
+      return {
+        id: p.id,
+        title: p.title,
+        poster_path: p.poster_path,
+        overview: "",
+        media_type: p.media_type,
+        resumeLabel: label,
+      } as GridItem;
+    });
+    
+    setContinueWatching(continueWatchingItems);
   }
 
   // We no longer short-circuit on loading; empty carousels will display their own skeletons

@@ -8,17 +8,23 @@ const TORRENT_DEBUG = process.env.TORRENT_DEBUG === "1";
 const HTTP_TIMEOUT = 60_000;
 
 // Initialise torrent-search-api once
-// We purposefully enable only general-content providers and exclude anime/kids-centric indexers.
+// Enable all available providers for maximum coverage
 try {
-  // Disable the default provider set and enable the ones we want explicitly
-  TorrentSearchApi.disableAllProviders && TorrentSearchApi.disableAllProviders();
-  // These cover a broad public catalogue of movies & TV
-  const providers = ["1337x", "ThePirateBay", "TorrentGalaxy", "EZTV"];
-  for (const p of providers) {
+  // Get all available providers and enable them (excluding non-viable ones)
+  const allProviders = [
+    "1337x", "bitsearch", "eztv", "glodls", "kickass", 
+    "limetorrent", "magnetdl", "nyaasi", "piratebay", "rarbg", 
+    "tgx", "torlock", "torrentfunk", "torrentproject", "yts"
+  ];
+  
+  for (const provider of allProviders) {
     try {
-      TorrentSearchApi.enableProvider(p);
+      TorrentSearchApi.enableProvider(provider);
     } catch (_err) {
       // Provider may fail to enable if captchas/change of site – ignore
+      if (TORRENT_DEBUG) {
+        console.warn(`Failed to enable provider: ${provider}`);
+      }
     }
   }
 } catch (_err) {
@@ -117,6 +123,76 @@ export async function searchTorrentOptions(title: string, year?: string, limit =
     // Helper: capture a 4-digit year token (1900-2099) that stands alone (avoid 1080p etc.)
     const yearTokenRe = /\b(19|20)\d{2}\b/;
 
+    // Helper: ensure series title appears before season/episode token in torrent name
+    const titleAppearsBeforeSeason = (torrentName: string | undefined): boolean => {
+      if (!torrentName) return false;
+
+      // Strip common release-group prefixes like “[TGx]”, “[YTS]” that precede the actual name
+      const stripped = torrentName.replace(/^(\[[^\]]+\][\s._-]*)+/i, "");
+
+      // Tokenize on common separators
+      const tokens = stripped.split(/[\s._-]+/).filter(Boolean);
+      const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+      const titleTokens = base.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter(Boolean);
+      if (titleTokens.length === 0) return false;
+
+      // Find index where all title tokens appear consecutively
+      const findTitleIndex = (): number => {
+        for (let i = 0; i <= tokens.length - titleTokens.length; i++) {
+          let matches = true;
+          for (let j = 0; j < titleTokens.length; j++) {
+            if (norm(tokens[i + j]) !== norm(titleTokens[j])) {
+              matches = false;
+              break;
+            }
+          }
+          if (matches) return i;
+        }
+        return -1;
+      };
+
+      const titleIdx = findTitleIndex();
+      if (titleIdx === -1) return false;
+
+      // Detect first season/episode indicator token position
+      const seasonIdx = tokens.findIndex((t) => /^(s\d{1,2}e\d{1,2}|\d{1,2}x\d{1,2})$/i.test(t));
+      const effectiveSeasonIdx = seasonIdx === -1 ? Number.MAX_SAFE_INTEGER : seasonIdx;
+
+      return titleIdx < effectiveSeasonIdx;
+    };
+
+    // Helper: ensure movie title appears within the first few tokens of the torrent name
+    const titleAppearsEarly = (torrentName: string | undefined): boolean => {
+      if (!torrentName) return false;
+
+      // Strip common release-group prefixes like “[TGx]”, “[YTS]” etc.
+      const stripped = torrentName.replace(/^(\[[^\]]+\][\s._-]*)+/i, "");
+
+      // Tokenize on common separators
+      const tokens = stripped.split(/[\s._-]+/).filter(Boolean);
+      const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+      const titleTokens = base.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter(Boolean);
+      if (titleTokens.length === 0) return false;
+
+      // Look for the title tokens appearing consecutively
+      for (let i = 0; i <= tokens.length - titleTokens.length; i++) {
+        let matches = true;
+        for (let j = 0; j < titleTokens.length; j++) {
+          if (norm(tokens[i + j]) !== norm(titleTokens[j])) {
+            matches = false;
+            break;
+          }
+        }
+        if (matches) {
+          // Accept if the title starts within the first 3 tokens (after any prefixes)
+          return i <= 2;
+        }
+      }
+      return false;
+    };
+
     // Ensure ratio present & quality detected
     const enrichedRaw = deduped.map((t) => {
       const qMatch = t.name?.match(qualityRe);
@@ -127,51 +203,81 @@ export async function searchTorrentOptions(title: string, year?: string, limit =
       return { ...t, quality, ratio, seeds, leeches } as TorrentInfo;
     });
 
-    const enriched: TorrentInfo[] = [];
-    for (const t of enrichedRaw) {
-      let rejectedReason: string | null = null;
-      if (t.quality === "CAM") rejectedReason = "CAM";
-      else if ((t.seeds ?? 0) < minSeeds) rejectedReason = `Low seeds (${t.seeds})`;
-      else if (isNonEnglish(t.name)) rejectedReason = "Non-English language tag";
-      else if (isEp && (t.size ?? 0) > 20 * 1024 * 1024 * 1024) rejectedReason = "Likely full season (size >20GB)";
-      else if (isEp && season !== undefined && episode !== undefined && !matchesEpisode(t.name, season, episode)) rejectedReason = "Episode token mismatch";
-      // Extra guards for MOVIE searches only
-      else if (!isEp) {
-        // 1) Reject torrents that clearly look like individual TV episodes
-        if (episodeTokenRe.test(t.name || "")) {
-          rejectedReason = "Appears to be TV episode for movie search";
-        }
+    // Helper function to filter torrents with optional seed requirements
+    const filterTorrents = (torrents: TorrentInfo[], allowLowSeeds = false): TorrentInfo[] => {
+      const filtered: TorrentInfo[] = [];
+      for (const t of torrents) {
+        let rejectedReason: string | null = null;
+        if (t.quality === "CAM") rejectedReason = "CAM";
+        else if (!allowLowSeeds && (t.seeds ?? 0) < minSeeds) rejectedReason = `Low seeds (${t.seeds})`;
+        else if (isNonEnglish(t.name)) rejectedReason = "Non-English language tag";
+        else if (isEp && (t.size ?? 0) > 20 * 1024 * 1024 * 1024) rejectedReason = "Likely full season (size >20GB)";
+        else if (isEp && season !== undefined && episode !== undefined && !matchesEpisode(t.name, season, episode)) rejectedReason = "Episode token mismatch";
+        else if (isEp && !titleAppearsBeforeSeason(t.name)) rejectedReason = "Series title appears after episode token";
+        // Extra guards for MOVIE searches only
+        else if (!isEp) {
 
-        // 2) If a distinct year token exists and we had a requested year, reject if it differs by >1
-        else if (year && yearTokenRe.test(t.name || "")) {
-          const yMatch = (t.name || "").match(yearTokenRe);
-          if (yMatch) {
-            const foundYear = parseInt(yMatch[0], 10);
-            const expectedYear = parseInt(year, 10);
-            if (Math.abs(foundYear - expectedYear) > 1) {
-              rejectedReason = `Year mismatch (${foundYear} vs ${expectedYear})`;
+          // 1) Reject torrents where the movie title appears late in the name (e.g., "... Wicked")
+          if (!titleAppearsEarly(t.name)) {
+            rejectedReason = "Title appears late in torrent name";
+          }
+
+          // 2) Reject torrents that clearly look like individual TV episodes
+          else if (episodeTokenRe.test(t.name || "")) {
+            rejectedReason = "Appears to be TV episode for movie search";
+          }
+
+          // 3) If a distinct year token exists and we had a requested year, reject if it differs by >1
+          else if (year && yearTokenRe.test(t.name || "")) {
+            const yMatch = (t.name || "").match(yearTokenRe);
+            if (yMatch) {
+              const foundYear = parseInt(yMatch[0], 10);
+              const expectedYear = parseInt(year, 10);
+              if (!isNaN(expectedYear) && foundYear !== expectedYear) {
+                rejectedReason = `Year mismatch (${foundYear} vs ${expectedYear})`;
+              }
             }
           }
         }
-      }
 
-      if (TORRENT_DEBUG) {
-        const baseInfo = {
-          name: t.name,
-          seeds: t.seeds,
-          leeches: t.leeches,
-          quality: t.quality,
-          sizeMB: t.size ? (t.size / (1024 * 1024)).toFixed(1) : undefined,
-        };
-        if (rejectedReason) {
-          console.log(`[filter] REJECT`, { ...baseInfo, reason: rejectedReason });
-        } else {
-          console.log(`[filter] KEEP`, baseInfo);
+        if (TORRENT_DEBUG) {
+          const baseInfo = {
+            name: t.name,
+            seeds: t.seeds,
+            leeches: t.leeches,
+            quality: t.quality,
+            sizeMB: t.size ? (t.size / (1024 * 1024)).toFixed(1) : undefined,
+          };
+          if (rejectedReason) {
+            console.log(`[filter] REJECT${allowLowSeeds ? " (fallback)" : ""}`, { ...baseInfo, reason: rejectedReason });
+          } else {
+            console.log(`[filter] KEEP${allowLowSeeds ? " (fallback)" : ""}`, baseInfo);
+          }
         }
-      }
 
-      if (rejectedReason) continue;
-      enriched.push(t);
+        if (rejectedReason) continue;
+        filtered.push(t);
+      }
+      return filtered;
+    };
+
+    // Try strict filtering first (with seed requirements)
+    let enriched = filterTorrents(enrichedRaw, false);
+
+    // If we have very few or no results, fall back to relaxed filtering (allow low seeds)
+    if (enriched.length < 2) {
+      if (TORRENT_DEBUG) {
+        console.log(`[filter] Only ${enriched.length} torrents found with normal seed requirements, trying fallback with relaxed seeds...`);
+      }
+      const fallbackFiltered = filterTorrents(enrichedRaw, true);
+      
+      // Combine results, preferring high-seed torrents but including low-seed ones
+      const combined = [...enriched, ...fallbackFiltered];
+      enriched = Array.from(new Map(combined.map(t => [t.magnet, t])).values());
+      
+      if (TORRENT_DEBUG) {
+        console.log(`[filter] Fallback filtering found ${fallbackFiltered.length} additional torrents (total: ${enriched.length})`);
+      }
     }
 
     if (enriched.length === 0) return [];
@@ -212,15 +318,27 @@ async function performSearch(searchTitle: string, limit: number, isEpisode: bool
 
   if (!Array.isArray(data)) return [];
 
-  // Compute ratio and filter low-seed torrents
-  const enriched = data
-    .map((t: any) => {
-      const seeds = parseInt(t.seeders);
-      const leeches = parseInt(t.leechers);
-      const ratio = leeches === 0 ? seeds : seeds / leeches;
-      return { ...t, seeds, leeches, ratio };
-    })
-    .filter((t: any) => t.seeds >= (isEpisode ? 5 : 20)); // allow lower seed count for episodes
+  const minSeeds = isEpisode ? 5 : 20;
+
+  // Compute ratio for all torrents first
+  const allEnriched = data.map((t: any) => {
+    const seeds = parseInt(t.seeders);
+    const leeches = parseInt(t.leechers);
+    const ratio = leeches === 0 ? seeds : seeds / leeches;
+    return { ...t, seeds, leeches, ratio };
+  });
+
+  // Try strict filtering first (with seed requirements)
+  let enriched = allEnriched.filter((t: any) => t.seeds >= minSeeds);
+
+  // If we have very few results, fall back to including low-seed torrents
+  if (enriched.length < 2) {
+    if (TORRENT_DEBUG) {
+      console.log(`[performSearch] Only ${enriched.length} torrents found with >= ${minSeeds} seeds, including low-seed options...`);
+    }
+    // Include all torrents but still exclude zero-seed torrents for basic quality
+    enriched = allEnriched.filter((t: any) => t.seeds > 0);
+  }
 
   if (enriched.length === 0) return [];
 
