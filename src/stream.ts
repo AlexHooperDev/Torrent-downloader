@@ -120,15 +120,9 @@ export async function streamTorrent(req: Request, res: Response) {
     return res.status(400).json({ error: "magnet query param required" });
   }
 
-  // Stop any other active torrents so the new request gets full bandwidth.
-  client.torrents.forEach((t: any) => {
-    if (t.magnetURI !== magnet) {
-      try {
-        debug(`[stream] Stopping previous torrent ${t.infoHash}`);
-        scheduleCleanup(t); // disconnect but keep files until 3am cleanup
-      } catch {}
-    }
-  });
+  // Allow multiple concurrent torrents. We no longer forcibly disconnect
+  // existing streams when a new one begins. Idle torrents will still be
+  // cleaned up automatically after the timeout defined by `idleTimeoutMs`.
 
   let torrent = client.get(magnet);
   if (!torrent) {
